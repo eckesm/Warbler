@@ -30,7 +30,7 @@ class Follows(db.Model):
 class Likes(db.Model):
     """Mapping user likes to warbles."""
 
-    __tablename__ = 'likes' 
+    __tablename__ = 'likes'
 
     id = db.Column(
         db.Integer,
@@ -47,6 +47,11 @@ class Likes(db.Model):
         db.ForeignKey('messages.id', ondelete='cascade'),
         unique=True
     )
+
+    @classmethod
+    def find_like(cls, message_id, user_id):
+        """Return like if it exists."""
+        return cls.query.filter_by(message_id=message_id, user_id=user_id).one_or_none()
 
 
 class User(db.Model):
@@ -121,14 +126,25 @@ class User(db.Model):
     def is_followed_by(self, other_user):
         """Is this user followed by `other_user`?"""
 
-        found_user_list = [user for user in self.followers if user == other_user]
+        found_user_list = [
+            user for user in self.followers if user == other_user]
         return len(found_user_list) == 1
 
     def is_following(self, other_user):
-        """Is this user following `other_use`?"""
+        """Is this user following `other_user`?"""
 
-        found_user_list = [user for user in self.following if user == other_user]
+        found_user_list = [
+            user for user in self.following if user == other_user]
         return len(found_user_list) == 1
+
+    def following_ids_list(self):
+        """Returns list of user id's followed by user."""
+
+        return [follow.id for follow in self.following]
+
+    def liked_message_ids_list(self):
+        return [message.id for message in self.likes]
+        # return self.likes
 
     @classmethod
     def signup(cls, username, email, password, image_url):
@@ -145,8 +161,13 @@ class User(db.Model):
             password=hashed_pwd,
             image_url=image_url,
         )
-
-        db.session.add(user)
+        
+        try:
+            db.session.add(user)
+            db.session.commit()
+        except:
+            db.session.rollback()
+        
         return user
 
     @classmethod
@@ -168,6 +189,16 @@ class User(db.Model):
                 return user
 
         return False
+
+    @classmethod
+    def get_by_email(cls, email):
+        """Return user matching email address."""
+        return cls.query.filter_by(email=email).one_or_none()
+
+    @classmethod
+    def get_by_username(cls, username):
+        """Return user matching username."""
+        return cls.query.filter_by(username=username).one_or_none()
 
 
 class Message(db.Model):
@@ -198,6 +229,11 @@ class Message(db.Model):
     )
 
     user = db.relationship('User')
+
+    likes = db.relationship('Likes')
+
+    def __repr__(self):
+        return f"<Message #{self.id}: {self.user.username}, {self.text}>"
 
 
 def connect_db(app):

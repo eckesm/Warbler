@@ -4,8 +4,10 @@ from flask import Flask, render_template, request, flash, redirect, session, g
 from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
-from forms import UserAddForm, LoginForm, MessageForm
-from models import db, connect_db, User, Message
+from forms import UserAddForm, LoginForm, MessageForm, UserEditForm
+from models import db, connect_db, User, Message, Likes
+
+import pdb
 
 CURR_USER_KEY = "curr_user"
 
@@ -18,7 +20,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = (
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ECHO'] = False
-app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = True
+app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', "it's a secret")
 toolbar = DebugToolbarExtension(app)
 
@@ -113,7 +115,9 @@ def login():
 def logout():
     """Handle logout of user."""
 
-    # IMPLEMENT THIS
+    do_logout()
+    flash("Logged out!", 'success')
+    return redirect('/login')
 
 
 ##############################################################################
@@ -177,6 +181,18 @@ def users_followers(user_id):
     return render_template('users/followers.html', user=user)
 
 
+@app.route('/users/<int:user_id>/likes')
+def users_likes(user_id):
+    """Show user's liked messages."""
+
+    user = User.query.get_or_404(user_id)
+
+    messages = db.session.query(Likes, Message).filter(
+        Likes.user_id == user_id).join(Message).order_by(Message.timestamp.desc()).limit(100).all()
+
+    return render_template('users/likes.html', user=user, messages=messages)
+
+
 @app.route('/users/follow/<int:follow_id>', methods=['POST'])
 def add_follow(follow_id):
     """Add a follow for the currently-logged-in user."""
@@ -211,7 +227,46 @@ def stop_following(follow_id):
 def profile():
     """Update profile for current user."""
 
-    # IMPLEMENT THIS
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    user = g.user
+    form = UserEditForm(obj=user)
+    if form.validate_on_submit():
+
+        current_username = user.username
+        current_email = user.email
+        password = form.password.data
+
+        if User.authenticate(current_username, password) == False:
+            flash(f'The entered password was incorrect.', 'danger')
+            return render_template('/users/edit.html', form=form, user=g.user)
+
+        username = form.username.data
+        if username != current_username and User.get_by_username(username) != None:
+            flash(
+                f'The username "{username}" is already associated with an account.', 'danger')
+            return render_template('/users/edit.html', form=form, user=g.user)
+
+        email = form.email.data
+        if email != current_email and User.get_by_email(email) != None:
+            flash(
+                f'The email address "{email}" is already associated with an account.', 'danger')
+            return render_template('/users/edit.html', form=form, user=g.user)
+
+        user.username = username
+        user.email = email
+        user.image_url = form.image_url.data or User.image_url.default.arg
+        user.header_image_url = form.header_image_url.data or User.header_image_url.default.arg
+        user.bio = form.bio.data
+        db.session.commit()
+
+        flash(f'Profile updated!', 'info')
+        return redirect(f"/users/{g.user.id}")
+
+    else:
+        return render_template('/users/edit.html', form=form, user=g.user)
 
 
 @app.route('/users/delete', methods=["POST"])
@@ -278,6 +333,54 @@ def messages_destroy(message_id):
 
     return redirect(f"/users/{g.user.id}")
 
+##############################################################################
+# Adding and removing likes
+
+
+@app.route('/users/add_like/<int:message_id>', methods=['POST'])
+def add_like(message_id):
+    """Add a like to a message."""
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    message = Message.query.get_or_404(message_id)
+    if message.user_id == g.user.id:
+        flash("Cannot like your own message.", "danger")
+        return redirect("/")
+
+    like = Likes.find_like(message_id, g.user.id)
+    if like == None:
+
+        new_like = Likes(message_id=message_id, user_id=g.user.id)
+        db.session.add(new_like)
+        db.session.commit()
+
+    return redirect(f'/')
+
+
+@app.route('/users/remove_like/<int:message_id>', methods=['POST'])
+def remove_like(message_id):
+    """Remove a like to a message."""
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    message = Message.query.get_or_404(message_id)
+    if message.user_id == g.user.id:
+        flash("Cannot like your own message.", "danger")
+        return redirect("/")
+
+    like = Likes.find_like(message_id, g.user.id)
+    if like != None:
+
+        db.session.delete(like)
+        db.session.commit()
+
+    return redirect(f'/')
+
 
 ##############################################################################
 # Homepage and error pages
@@ -294,11 +397,14 @@ def homepage():
     if g.user:
         messages = (Message
                     .query
+                    .filter(Message.user_id.in_(g.user.following_ids_list()))
                     .order_by(Message.timestamp.desc())
                     .limit(100)
                     .all())
 
-        return render_template('home.html', messages=messages)
+        liked_messages = g.user.liked_message_ids_list()
+
+        return render_template('home.html', messages=messages, liked_messages=liked_messages)
 
     else:
         return render_template('home-anon.html')

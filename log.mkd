@@ -1,0 +1,7 @@
+# Log
+
+## Additional Edits
+- Added custom validation to username and email address inputs at signup.
+- Fixed profile edit form cancel button.
+- Fixed html error when displaying unfollow button on index.
+- Added button for logged-in users to see all users so that it is possible to browse and follow new users.

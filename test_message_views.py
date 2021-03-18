@@ -4,11 +4,9 @@
 #
 #    FLASK_ENV=production python -m unittest test_message_views.py
 
-
-import os
-from unittest import TestCase
-
 from models import db, connect_db, Message, User
+from unittest import TestCase
+import os
 
 # BEFORE we import our app, let's set an environmental variable
 # to use a different database for tests (we need to do this
@@ -16,11 +14,9 @@ from models import db, connect_db, Message, User
 # connected to the database
 
 os.environ['DATABASE_URL'] = "postgresql:///warbler-test"
-
+from app import app, CURR_USER_KEY
 
 # Now we can import app
-
-from app import app, CURR_USER_KEY
 
 # Create our tables (we do this here, so we only create the tables
 # once for all tests --- in each test, we'll delete the data
@@ -71,3 +67,44 @@ class MessageViewTestCase(TestCase):
 
             msg = Message.query.one()
             self.assertEqual(msg.text, "Hello")
+
+    def test_show_message(self):
+        """Can user show a message?"""
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+
+            m = Message(text="Hello again.", user_id=self.testuser.id)
+            db.session.add(m)
+            db.session.commit()
+
+            resp = c.get(f'/messages/{m.id}')
+
+            self.assertEqual(resp.status_code, 200)
+
+            self.assertIn(
+                b'<p class="single-message">Hello again.</p>', resp.data)
+
+    def test_delete_message(self):
+        """Can user delete a message?"""
+
+        with self.client as c:
+            with c.session_transaction() as sess:
+                sess[CURR_USER_KEY] = self.testuser.id
+
+            m = Message(text="Hello once again.", user_id=self.testuser.id)
+            db.session.add(m)
+            db.session.commit()
+
+            u = User.query.get(self.testuser.id)
+            self.assertEqual(len(u.messages), 1)
+
+            resp = c.post(f"/messages/{m.id}/delete")
+
+            # Make sure it redirects
+            self.assertEqual(resp.status_code, 302)
+
+            msg = Message.query.filter_by(id=m.id).one_or_none()
+            self.assertIsNone(msg)
+            self.assertEqual(len(u.messages), 0)
